@@ -1,0 +1,62 @@
+# Requests review from the managers when someone outside the managers team opens a pull request.
+#
+# CODEOWNERS (required by the org's repo-hygiene check) pings the owning team on every PR, but
+# managers are exempt from the org's "Review required" ruleset, so a manager's PR needs no approval
+# and shouldn't page anyone. The managers are therefore not members of the owning teams; this
+# workflow asks them for review only when an approval is actually needed. Bot PRs (Dependabot)
+# are skipped: managers can merge those without an approval.
+#
+# pull_request_target runs this file from the default branch with a write token. That is safe
+# here only because the job never checks out or runs code from the pull request. Keep it that way.
+name: request-review
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  request-review:
+    name: request-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Request review from the managers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          # Keep in sync with the managers team (exempt in the "Review required" ruleset).
+          MANAGERS: ethaniusb etrow1
+        run: |
+          set -euo pipefail
+          shopt -s nocasematch
+
+          if [[ "$DRAFT" == "true" ]]; then
+            echo "Draft PR: review will be requested when it's marked ready."
+            exit 0
+          fi
+          if [[ "$AUTHOR_TYPE" == "Bot" ]]; then
+            echo "Opened by $AUTHOR, a bot: no review requested."
+            exit 0
+          fi
+          for manager in $MANAGERS; do
+            if [[ "$manager" == "$AUTHOR" ]]; then
+              echo "Opened by $AUTHOR, a manager exempt from review: no review requested."
+              exit 0
+            fi
+          done
+
+          args=()
+          for manager in $MANAGERS; do
+            args+=(-f "reviewers[]=$manager")
+          done
+          gh api --method POST "repos/$REPO/pulls/$PR/requested_reviewers" "${args[@]}" --silent
+          echo "Requested review from: $MANAGERS"
